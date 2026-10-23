@@ -25,7 +25,7 @@ def create_time_series_features(df_resampled, target_col="Sales", freq="D", lags
     n= len(df)
 
     if lags is None:
-        if freq == "M":
+        if freq in ("M", "ME"):
             lags = [1,2,3,6,12] if n >= 24 else [1,2,3]
         elif freq == "W":
             lags = [1,2,4,8,12] if n >= 52 else [1,2,4]
@@ -33,7 +33,7 @@ def create_time_series_features(df_resampled, target_col="Sales", freq="D", lags
             lags = [1,2,3,7,14,30] if n >= 60 else [1,2,3,7]
 
     if rolling_windows is None:
-        if freq == "M":
+        if freq in ("M", "ME"):
             rolling_windows = [3,6] if n >= 24 else [3]
         elif freq == "W":
             rolling_windows = [4,12] if n >= 52 else [4]
@@ -59,6 +59,9 @@ def create_time_series_features(df_resampled, target_col="Sales", freq="D", lags
         df[f"rolling_std_{window}"] = df["lag_1"].rolling(window=window).std()
         df[f"rolling_min_{window}"] = df["lag_1"].rolling(window=window).min()
         df[f"rolling_max_{window}"] = df["lag_1"].rolling(window=window).max()
+
+    if freq != "D":
+        df = df.drop(columns=["day_of_week", "is_weekend"])
         
     # Drop rows containing NaNs introduced by lagging/rolling
     df_clean = df.dropna().reset_index(drop=True)

@@ -4,6 +4,11 @@ import numpy as np
 
 DEFAULT_DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "train.csv")
 
+def normalize_frequency(freq):
+    if freq in ("M", "ME"):
+        return pd.offsets.MonthEnd()
+    return freq
+
 def load_raw_data(file_path=DEFAULT_DATA_PATH):
     """Loads raw Superstore sales dataset and enforces proper data types."""
     if not os.path.exists(file_path):
@@ -41,6 +46,7 @@ def resample_sales_data(df, freq="D", group_by=None):
         pd.DataFrame or pd.Series: Aggregated continuous time series.
     """
     df_copy = df.copy()
+    freq = normalize_frequency(freq)
     
     if group_by:
         if isinstance(group_by, str):

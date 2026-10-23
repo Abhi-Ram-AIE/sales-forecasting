@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 from statsmodels.tsa.seasonal import seasonal_decompose
 from statsmodels.tsa.stattools import adfuller, acf, pacf
 
@@ -13,6 +12,12 @@ def check_stationarity(ts, maxlag=None):
     """
     # Remove missing values
     clean_ts = ts.dropna()
+    if len(clean_ts) < 10 or clean_ts.nunique() < 2:
+        return {
+            "adf_statistic": float("nan"), "p_value": float("nan"), "lags_used": 0,
+                "n_obs": len(clean_ts), "critical_values": {"1%": float("nan"), "5%": float("nan"), "10%": float("nan")},
+                "is_stationary": False, "conclusion": "Not enough variation/data to run the ADF test"
+        }
     
     result = adfuller(clean_ts, maxlag=maxlag)
     
@@ -44,7 +49,7 @@ def decompose_time_series(ts, period=7, model="additive"):
         model (str): 'additive' or 'multiplicative'.
     """
     clean_ts = ts.dropna()
-    decomposition = seasonal_decompose(clean_ts, period=period, model=model, extrapolate_trend="freq")
+    decomposition = seasonal_decompose(clean_ts, period=int(period), model=model, extrapolate_trend=0)
     
     return {
         "observed": decomposition.observed,
@@ -86,4 +91,4 @@ if __name__ == "__main__":
     print("\n=== ACF & PACF LAG VALUES ===")
     corrs = compute_acf_pacf(daily_sales, nlags=7)
     print("ACF (Lags 0-7):", np.round(corrs["acf"], 3))
-    print("PACF (Lags 0-7):", np.round(pacf_vals if 'pacf_vals' in locals() else corrs["pacf"], 3))
+    print("PACF (Lags 0-7):", np.round(corrs["pacf"], 3))

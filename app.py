@@ -9,7 +9,7 @@ import streamlit as st
 # Add src to system path
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
-from src.data_loader import load_raw_data, resample_sales_data
+from src.data_loader import load_raw_data, resample_sales_data, normalize_frequency
 from src.pivot_analytics import build_pivot_table, get_category_distribution
 from src.time_series_eda import check_stationarity, decompose_time_series
 from src.feature_engineering import create_time_series_features
@@ -69,7 +69,7 @@ df_raw = get_dataset()
 
 # --- SIDEBAR FILTERS ---
 st.sidebar.image("https://cdn-icons-png.flaticon.com/512/3135/3135715.png", width=70)
-st.sidebar.title("Control Panel")
+st.sidebar.title("Filter")
 st.sidebar.markdown("Filter Superstore Transactions:")
 
 categories = ["All"] + list(df_raw["Category"].unique())
@@ -90,9 +90,19 @@ if selected_region != "All":
 if selected_segment != "All":
     filtered_df = filtered_df[filtered_df["Segment"] == selected_segment]
 
+if filtered_df.empty:
+    st.warning("No transactions match the selected filters.")
+    st.stop()
+
 # Resampling frequency
 freq_option = st.sidebar.radio("Time Aggregation Frequency", ["Daily", "Weekly", "Monthly"], index=0)
-freq_code = {"Daily": "D", "Weekly": "W", "Monthly": "M"}[freq_option]
+freq_code = {"Daily": "D", "Weekly": "W", "Monthly": "ME"}[freq_option]
+freq_obj = normalize_frequency(freq_code)
+SEASONAL_S = {"D": 7, "W": 4, "ME": 12}[freq_code]
+
+def get_seasonal_order(n_obs, s):
+    """Only use seasonality if there are at least 3 full cycles of data."""
+    return (1, 1, 1, s) if n_obs >= 3 * s else (0, 0, 0, 0)
 
 # --- MAIN HEADER ---
 st.markdown('<div class="main-header">Superstore Sales BI & Forecasting Suite</div>', unsafe_allow_html=True)
@@ -144,7 +154,7 @@ with tab1:
             title="Revenue Share by Product Category"
         )
         fig_pie.update_traces(textinfo="percent+label")
-        st.plotly_chart(fig_pie, use_container_width=True)
+        st.plotly_chart(fig_pie, width="stretch")
 
     with t1_col2:
         st.markdown("Sales Share by Segment")
@@ -158,11 +168,11 @@ with tab1:
             title="Revenue Share by Customer Segment"
         )
         fig_seg.update_traces(textinfo="percent+label")
-        st.plotly_chart(fig_seg, use_container_width=True)
+        st.plotly_chart(fig_seg, width="stretch")
 
     st.markdown("Excel Pivot Matrix: Category vs Region Sales")
     pivot_df = build_pivot_table(filtered_df, index_col="Category", columns_col="Region", values_col="Sales")
-    st.dataframe(pivot_df.style.format("${:,.2f}"), use_container_width=True)
+    st.dataframe(pivot_df.style.format("${:,.2f}"), width="stretch")
     
     st.markdown("Pivot Graph: Sub-Category Revenue Breakdown")
     subcat_sales = filtered_df.groupby(["Sub-Category", "Category"])["Sales"].sum().reset_index()
@@ -174,7 +184,7 @@ with tab1:
         title="Sales by Sub-Category",
         text_auto="$.2s"
     )
-    st.plotly_chart(fig_bar, use_container_width=True)
+    st.plotly_chart(fig_bar, width="stretch")
 
 # ==========================================
 # TAB 2: TIME SERIES DIAGNOSTICS
@@ -182,7 +192,7 @@ with tab1:
 with tab2:
     st.subheader("Time Series Decomposition & Stationarity Testing")
     
-    ts_data = resample_sales_data(filtered_df, freq=freq_code).set_index("Order Date")["Sales"]
+    ts_data = resample_sales_data(filtered_df, freq=freq_code).set_index("Order Date")["Sales"].asfreq(freq_obj)
     
     # 1. Line chart of time series
     fig_ts = px.line(
@@ -192,7 +202,7 @@ with tab2:
         title=f"Historical Aggregated Sales ({freq_option})",
         line_shape="linear"
     )
-    st.plotly_chart(fig_ts, use_container_width=True)
+    st.plotly_chart(fig_ts, width="stretch")
     
     # 2. Stationarity Card
     adf_res = check_stationarity(ts_data)
@@ -215,7 +225,7 @@ with tab2:
         "Trend": decomp["trend"],
         "Seasonal": decomp["seasonal"],
         "Residual": decomp["resid"]
-    }).reset_index()
+    }).rename_axis("Order Date").reset_index()
     
     fig_decomp = px.line(
         decomp_df,
@@ -227,7 +237,7 @@ with tab2:
         height=700
     )
     fig_decomp.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
-    st.plotly_chart(fig_decomp, use_container_width=True)
+    st.plotly_chart(fig_decomp, width="stretch")
 
 # ==========================================
 # TAB 3: PREDICTIVE MODEL ARENA
@@ -244,19 +254,19 @@ with tab3:
     features_df = create_time_series_features(daily_resampled, freq=freq_code)
 
     if len(features_df) < 8:
-        st.warning("Insufficient records ({len(features_df)} rows) under current filter/frequency to benchmark ML models. Please select a broader filter or Daily frequency.")
+        st.warning(f"Insufficient records ({len(features_df)} rows) under current filter/frequency to benchmark ML models. Please select a broader filter or Daily frequency.")
     else:
         test_size = min(desired_test_size, max(2, int(int(len(features_df)*0.2))))
 
         st.subheader("Model Leaderboard & Out-Of-Sample Benchmark")
-        st.markdown("We split the last **30 periods** as a test set to benchmark statistical vs. machine learning models.")
+        st.markdown(f"We hold out the last **{test_size} periods** as a test set to benchmark statistical vs. machine learning models.")
 
         with st.spinner("Training SARIMAX, XGBoost and RandomForest models..."):
             # 1. SARIMAX
             train_ts = ts_data.iloc[:-test_size]
             test_ts = ts_data.iloc[-test_size:]
             
-            sarimax_fit = fit_sarimax_model(train_ts, order=(1, 1, 1), seasonal_order=(1, 1, 1, min(7, len(train_ts)//2)))
+            sarimax_fit = fit_sarimax_model(train_ts, order=(1, 1, 1), seasonal_order=get_seasonal_order(len(train_ts), SEASONAL_S))
             sarimax_fc = forecast_sarimax(sarimax_fit, steps=test_size)
             sarimax_fc.index = test_ts.index
             metrics_sarimax = evaluate_forecast(test_ts, sarimax_fc["forecast"])
@@ -277,7 +287,7 @@ with tab3:
         ]).sort_values("MAE").reset_index(drop=True)
         
         st.markdown("Model Performance Comparison")
-        st.dataframe(leaderboard, use_container_width=True)
+        st.dataframe(leaderboard, width="stretch")
         
         # Plot Comparison
         comp_df = pd.DataFrame({
@@ -291,22 +301,23 @@ with tab3:
             comp_df,
             x="Order Date",
             y=["Actual Sales", "SARIMAX", "XGBoost", "Random Forest"],
-            title="30-Period Holdout Test Set: Actual vs Predicted Sales",
+            title="{test_size}-Period Holdout Test Set: Actual vs Predicted Sales",
             markers=True
         )
-        st.plotly_chart(fig_comp, use_container_width=True)
+        st.plotly_chart(fig_comp, width="stretch")
         
         st.markdown("XGBoost Feature Importance Breakdown")
+        imp_df = xgb_res["feature_importances"].head(10).rename_axis("Feature").reset_index(name="Importance")
         fig_imp = px.bar(
-            xgb_res["feature_importances"].head(10).reset_index(),
-            x="index",
-            y=0,
+            imp_df,
+            x="Feature",
+            y="Importance",
             labels={"index": "Feature", "0": "Relative Importance"},
             title="Top 10 Predictors driving Sales in XGBoost",
-            color=0,
+            color="Importance",
             color_continuous_scale="Blues"
         )
-        st.plotly_chart(fig_imp, use_container_width=True)
+        st.plotly_chart(fig_imp, width="stretch")
 
 # ==========================================
 # TAB 4: FUTURE SALES FORECAST
@@ -321,24 +332,27 @@ with tab4:
     else:
         min_h, max_h, def_h, step_h = 2, 12, 6, 1
     
-    forecast_horizon = st.slider("Select Forecast Horizon (Days/Periods into Future)", min_value=7, max_value=60, value=14, step=7)
+    forecast_horizon = st.slider("Select Forecast Horizon (Periods into Future)", min_value=min_h, max_value=max_h, value=def_h, step=step_h)
     
     if st.button("Generate Future Forecast"):
         with st.spinner(f"Generating {forecast_horizon}-period future forecast..."):
-            s_order = 7 if freq_code == "D" else (4 if freq_code == "W" else 12)
-            full_sarimax = fit_sarimax_model(ts_data, order=(1, 1, 1), seasonal_order=(1, 1, 1, min(s_order, max(2, len(ts_data)//2))))
+            full_sarimax = fit_sarimax_model(
+                ts_data, order=(1, 1, 1),
+                seasonal_order=get_seasonal_order(len(ts_data), SEASONAL_S)
+            )
             future_df = forecast_sarimax(full_sarimax, steps=forecast_horizon)
-            
-            # Create Future Dates
+
+            # last_date is always on the frequency boundary, so this works for D, W and month-end
             last_date = ts_data.index[-1]
-            future_dates = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=forecast_horizon, freq=freq_code)
+            future_dates = pd.date_range(start=last_date, periods=forecast_horizon + 1, freq=freq_obj)[1:]
             future_df.index = future_dates
-            
-            st.success(f"Generated forecast for {forecast_horizon} periods ({future_dates[0].strftime('%Y-%m-%d')} to {future_dates[-1].strftime('%Y-%m-%d')})!")
-            
-            # Combine historical + forecast
+            future_df.index.name = "Order Date"
+
+            st.success(f"Generated forecast for {forecast_horizon} periods "
+                    f"({future_dates[0].strftime('%Y-%m-%d')} to {future_dates[-1].strftime('%Y-%m-%d')})!")
+
             hist_df = ts_data.tail(60).reset_index()
-            fut_df = future_df.reset_index().rename(columns={"index": "Order Date"})
+            fut_df = future_df.reset_index()
             
             fig_fut = go.Figure()
             
@@ -379,7 +393,7 @@ with tab4:
                 hovermode="x unified"
             )
             
-            st.plotly_chart(fig_fut, use_container_width=True)
+            st.plotly_chart(fig_fut, width="stretch")
             
             st.markdown("Forecast Data Table")
-            st.dataframe(future_df.style.format("${:,.2f}"), use_container_width=True)
+            st.dataframe(future_df.style.format("${:,.2f}"), width="stretch")

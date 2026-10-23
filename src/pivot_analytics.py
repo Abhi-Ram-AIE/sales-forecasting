@@ -1,7 +1,5 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 def build_pivot_table(df, index_col="Category", columns_col="Region", values_col="Sales", aggfunc="sum"):
     """
